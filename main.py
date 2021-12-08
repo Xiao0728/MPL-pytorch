@@ -210,6 +210,7 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader,
             # this is the student loss on the pseudo labels
             s_loss = criterion(s_logits_us, hard_pseudo_label)
 
+        #### XWCM: this updates the student model based on the (hard) pseudo labels
         s_scaler.scale(s_loss).backward()
         if args.grad_clip > 0:
             s_scaler.unscale_(s_optimizer)
@@ -220,19 +221,27 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader,
         if args.ema > 0:
             avg_student_model.update_parameters(student_model)
 
+        
         with amp.autocast(enabled=args.amp):
             with torch.no_grad():
                 s_logits_l = student_model(images_l)
             s_loss_l_new = F.cross_entropy(s_logits_l.detach(), targets)
             # dot_product = s_loss_l_new - s_loss_l_old
             # test
+            #### XWCM: dot_product is how much the student model was improved based on 
+            #### backpropagaion from the hard labels
             dot_product = s_loss_l_old - s_loss_l_new
             # moving_dot_product = moving_dot_product * 0.99 + dot_product * 0.01
             # dot_product = dot_product - moving_dot_product
+            
+            #### XWCM: why we compare t_logits_us with itself using cross-entropy??
             _, hard_pseudo_label = torch.max(t_logits_us.detach(), dim=-1)
+            #### XWCM: teacher loss is weighted by the improvement in the student 
             t_loss_mpl = dot_product * F.cross_entropy(t_logits_us, hard_pseudo_label)
+            #### XWCM: combination of labelled, pseudo labelled
             t_loss = t_loss_uda + t_loss_mpl
 
+        #### XWCM: now update the teacher model through back propogation of the two teacher losses
         t_scaler.scale(t_loss).backward()
         if args.grad_clip > 0:
             t_scaler.unscale_(t_optimizer)
