@@ -163,18 +163,25 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader,
 
         data_time.update(time.time() - end)
 
+        # labelled images
         images_l = images_l.to(args.device)
+        # weak and strong augmentation images, both are unlabelled
         images_uw = images_uw.to(args.device)
         images_us = images_us.to(args.device)
+        # labels for images_l
         targets = targets.to(args.device)
         with amp.autocast(enabled=args.amp):
             batch_size = images_l.shape[0]
+            #                     labelled, unlabelled - weak and strong?
             t_images = torch.cat((images_l, images_uw, images_us))
             t_logits = teacher_model(t_images)
+            # predictions for labelled images
             t_logits_l = t_logits[:batch_size]
+            # predictions for "unlabelled" images
             t_logits_uw, t_logits_us = t_logits[batch_size:].chunk(2)
             del t_logits
 
+            # this is teacher loss on the labelled images
             t_loss_l = criterion(t_logits_l, targets)
 
             soft_pseudo_label = torch.softmax(t_logits_uw.detach()/args.temperature, dim=-1)
@@ -184,15 +191,23 @@ def train_loop(args, labeled_loader, unlabeled_loader, test_loader,
                 -(soft_pseudo_label * torch.log_softmax(t_logits_us, dim=-1)).sum(dim=-1) * mask
             )
             weight_u = args.lambda_u * min(1., (step+1) / args.uda_steps)
+            
+            # this is a weighted combination of labelled and pseudo-loss
+            # weight_u controls the influence of "unlabelled loss"
             t_loss_uda = t_loss_l + weight_u * t_loss_u
 
             s_images = torch.cat((images_l, images_us))
             s_logits = student_model(s_images)
+            # predictions for labelled images
             s_logits_l = s_logits[:batch_size]
+            # predictions for strongly augmented unlabelled images
             s_logits_us = s_logits[batch_size:]
             del s_logits
 
+            # student CE loss on the labelled images - this is ignored...
+            # and hence gradients are not used (c.f. detach()).
             s_loss_l_old = F.cross_entropy(s_logits_l.detach(), targets)
+            # this is the student loss on the pseudo labels
             s_loss = criterion(s_logits_us, hard_pseudo_label)
 
         s_scaler.scale(s_loss).backward()
